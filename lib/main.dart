@@ -214,6 +214,15 @@ class _TfliteHomeState extends State<TfliteHome> {
                   height: 50,
                 ),
                 Text(
+                  'Contact: faisal.atik@gmail.com',
+                  style: TextStyle(
+                    fontSize: 20,
+                  ),
+                ),
+                SizedBox(
+                  height: 20,
+                ),
+                Text(
                   "One more time?",
                   style: TextStyle(
                     fontSize: 30,
