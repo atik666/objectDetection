@@ -244,15 +244,14 @@ class _TfliteHomeState extends State<TfliteHome> {
             onPressed: selectFromImagePicker,
           ),
           SizedBox(
-            width: 20,
+            width: 30,
           ),
           FloatingActionButton(
-            child: Icon(Icons.camera),
-            tooltip: "Pick Image from gallery",
+            child: Icon(
+              Icons.camera,
+            ),
+            tooltip: "Pick Image from camera",
             onPressed: selectFromCamera,
-          ),
-          SizedBox(
-            height: 20,
           ),
         ],
       ),
