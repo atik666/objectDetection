@@ -1,70 +1,102 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:tflite/tflite.dart';
 import 'package:image_picker/image_picker.dart';
-import 'dart:io';
+import 'package:image/image.dart' as img;
 
 void main() {
   runApp(MyApp());
 }
 
+const String ssd = "SSD MobileNet";
+const String yolo = "Tiny YOLOv2";
+
 class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Detect Objects',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-      ),
-      home: MyHomePage(),
       debugShowCheckedModeBanner: false,
+      home: TfliteHome(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
+class TfliteHome extends StatefulWidget {
   @override
-  _MyHomePageState createState() => _MyHomePageState();
+  _TfliteHomeState createState() => _TfliteHomeState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
+class _TfliteHomeState extends State<TfliteHome> {
+  String _model = yolo;
   File _image;
+
   double _imageWidth;
   double _imageHeight;
-  var _recognitions;
+  bool _busy = false;
+
+  List _recognitions;
+
+  @override
+  void initState() {
+    super.initState();
+    _busy = true;
+
+    loadModel().then((val) {
+      setState(() {
+        _busy = false;
+      });
+    });
+  }
 
   loadModel() async {
     Tflite.close();
     try {
       String res;
-      res = await Tflite.loadModel(
-        model: "assets/mobilenet.tflite",
-        labels: "assets/labels.txt",
-      );
+      if (_model == yolo) {
+        res = await Tflite.loadModel(
+          model: "assets/tflite/yolov2_tiny.tflite",
+          labels: "assets/tflite/yolov2_tiny.txt",
+        );
+      } else {
+        res = await Tflite.loadModel(
+          model: "assets/tflite/ssd_mobilenet.tflite",
+          labels: "assets/tflite/ssd_mobilenet.txt",
+        );
+      }
       print(res);
     } on PlatformException {
       print("Failed to load the model");
     }
   }
 
-  Future predict(File image) async {
-    var recognition = await Tflite.runModelOnImage(
-      path: image.path,
-      imageMean: 0.0,
-      imageStd: 255.0,
-      numResults: 2,
-      threshold: 0.3,
-      asynch: true,
-    );
-    print(recognition);
+  selectFromImagePicker() async {
+    var image = await ImagePicker.pickImage(source: ImageSource.gallery);
+    if (image == null) return;
     setState(() {
-      _recognitions = recognition;
+      _busy = true;
     });
+    predictImage(image);
   }
 
-  sendImage(File image) async {
+  selectFromCamera() async {
+    var image = await ImagePicker.pickImage(source: ImageSource.camera);
     if (image == null) return;
-    await predict(image);
+    setState(() {
+      _busy = true;
+    });
+    predictImage(image);
+  }
+
+  predictImage(File image) async {
+    if (image == null) return;
+
+    if (_model == yolo) {
+      await yolov2Tiny(image);
+    } else {
+      await ssdMobileNet(image);
+    }
 
     FileImage(image)
         .resolve(ImageConfiguration())
@@ -72,134 +104,162 @@ class _MyHomePageState extends State<MyHomePage> {
           setState(() {
             _imageWidth = info.image.width.toDouble();
             _imageHeight = info.image.height.toDouble();
-            _image = image;
           });
         })));
-  }
 
-  // select image from gallery
-  selectFromGallery() async {
-    var imageFile;
-    final picker = ImagePicker();
-    var image = await picker.getImage(source: ImageSource.gallery);
-    if (image == null) return;
     setState(() {
-      if (image != null) {
-        imageFile = File(image.path);
-      }
+      _image = image;
+      _busy = false;
     });
-    sendImage(imageFile);
   }
 
-  selectFromCamera() async {
-    var imageFile;
-    final picker = ImagePicker();
-    var image = await picker.getImage(source: ImageSource.camera);
-    if (image == null) return;
+  yolov2Tiny(File image) async {
+    var recognitions = await Tflite.detectObjectOnImage(
+        path: image.path,
+        model: "YOLO",
+        threshold: 0.3,
+        imageMean: 0.0,
+        imageStd: 255.0,
+        numResultsPerClass: 1);
+
     setState(() {
-      if (image != null) {
-        imageFile = File(image.path);
-      }
-    });
-    sendImage(imageFile);
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    loadModel().then((val) {
-      setState(() {});
+      _recognitions = recognitions;
     });
   }
 
-  Widget printValue(rcg) {
-    if (rcg == null) {
-      return Text(
-        "Input Image for detection",
-        style: TextStyle(
-          fontSize: 30,
-          fontWeight: FontWeight.w700,
-        ),
-      );
-    } else if (rcg.isEmpty) {
-      return Center(
-        child: Text(
-          "Could not recognize",
-          style: TextStyle(
-            fontSize: 25,
-            fontWeight: FontWeight.w700,
+  ssdMobileNet(File image) async {
+    var recognitions = await Tflite.detectObjectOnImage(
+        path: image.path, numResultsPerClass: 1);
+
+    setState(() {
+      _recognitions = recognitions;
+    });
+  }
+
+  List<Widget> renderBoxes(Size screen) {
+    if (_recognitions == null) return [];
+    if (_imageWidth == null || _imageHeight == null) return [];
+
+    double factorX = screen.width;
+    double factorY = _imageHeight / _imageHeight * screen.width;
+
+    Color blue = Colors.blueAccent;
+
+    return _recognitions.map((re) {
+      return Positioned(
+        left: re["rect"]["x"] * factorX,
+        top: re["rect"]["y"] * factorY,
+        width: re["rect"]["w"] * factorX,
+        height: re["rect"]["h"] * factorY,
+        child: Container(
+          decoration: BoxDecoration(
+              border: Border.all(
+            color: blue,
+            width: 3,
+          )),
+          child: Text(
+            "${re["detectedClass"]} ${(re["confidenceInClass"] * 100).toStringAsFixed(0)}%",
+            style: TextStyle(
+              background: Paint()..color = blue,
+              color: Colors.white,
+              fontSize: 15,
+            ),
           ),
         ),
       );
-    }
-    return Padding(
-      padding: EdgeInsets.fromLTRB(0, 0, 0, 0),
-      child: Center(
-        child: Text(
-          "Detected:" + _recognitions[0]['label'].toString().toUpperCase(),
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-        ),
-      ),
-    );
+    }).toList();
   }
 
   @override
   Widget build(BuildContext context) {
     Size size = MediaQuery.of(context).size;
-    double finalW;
-    double finalH;
 
-    if (_imageWidth == null && _imageHeight == null) {
-      finalW = size.width;
-      finalH = size.height;
-    } else {
-      double ratioW = size.width / _imageWidth;
-      double ratioH = size.height / _imageHeight;
+    List<Widget> stackChildren = [];
 
-      finalW = _imageWidth * ratioW * 0.85;
-      finalH = _imageHeight * ratioH * 0.50;
+    stackChildren.add(Positioned(
+      top: 0.0,
+      left: 0.0,
+      width: size.width,
+      child: _image == null
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                SizedBox(
+                  height: 20,
+                ),
+                Text(
+                  "No Image Selected",
+                  style: TextStyle(
+                    fontSize: 30,
+                  ),
+                ),
+                Image(
+                  image: AssetImage('assets/img.jpg'),
+                ),
+                SizedBox(
+                  height: 60,
+                ),
+                Text(
+                  "Upload from gallery or camera",
+                  style: TextStyle(
+                    fontSize: 23,
+                  ),
+                ),
+              ],
+            )
+          : Column(
+              children: [
+                Image.file(_image),
+                SizedBox(
+                  height: 50,
+                ),
+                Text(
+                  "One more time?",
+                  style: TextStyle(
+                    fontSize: 30,
+                  ),
+                ),
+              ],
+            ),
+    ));
+
+    stackChildren.addAll(renderBoxes(size));
+
+    if (_busy) {
+      stackChildren.add(Center(
+        child: CircularProgressIndicator(),
+      ));
     }
 
     return Scaffold(
       appBar: AppBar(
-        title: Text("Object Detection"),
-        centerTitle: true,
+        title: Text("Detect Objects"),
       ),
-      body: ListView(
+      floatingActionButton: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          printValue(_recognitions),
-          _image == null
-              ? Center(
-                  child: Text(
-                    "Select image from camera or gallery",
-                    style: TextStyle(
-                      fontSize: 25,
-                    ),
-                  ),
-                )
-              : Center(
-                  child: Image.file(
-                    _image,
-                    fit: BoxFit.fill,
-                    width: finalW,
-                    height: finalH,
-                  ),
-                ),
-          Row(
-            children: [
-              FlatButton.icon(
-                onPressed: selectFromCamera,
-                icon: Icon(Icons.camera),
-                label: Text("Camera"),
-              ),
-              FlatButton.icon(
-                onPressed: selectFromGallery,
-                icon: Icon(Icons.file_upload),
-                label: Text("Camera"),
-              ),
-            ],
-          )
+          FloatingActionButton(
+            child: Icon(Icons.image),
+            tooltip: "Pick Image from gallery",
+            onPressed: selectFromImagePicker,
+          ),
+          SizedBox(
+            width: 20,
+          ),
+          FloatingActionButton(
+            child: Icon(Icons.camera),
+            tooltip: "Pick Image from gallery",
+            onPressed: selectFromCamera,
+          ),
+          SizedBox(
+            height: 20,
+          ),
         ],
+      ),
+      body: Center(
+        child: Stack(
+          children: stackChildren,
+        ),
       ),
     );
   }
